@@ -20,3 +20,4 @@ path = "examples/demo.rs"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 url = "2"
+fancy-log = "0.1"
