@@ -1,6 +1,6 @@
 [package]
 name = "lazy-sock"
-version = "1.0.4"
+version = "1.0.5"
 edition = "2024"
 description = "A lightweight library for building Unix Domain Socket services with zero boilerplate. It provides a simple macro to create .sock files (default in /tmp, no root required, auto-clean on reboot). Just init the socket path, register routes, bind handlers, and you can curl for JSON responses."
 license = "MIT"
