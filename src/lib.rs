@@ -1,10 +1,12 @@
 /* src/lib.rs */
 
+/* src/lib.rs */
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal;
 use tokio::sync::RwLock;
@@ -18,16 +20,16 @@ pub use request::Request;
 pub use response::Response;
 pub use router::{Method, Router};
 
-/// 回调函数类型定义
+/// Type alias for the handler function.
 pub type HandlerFn = Arc<dyn Fn(Request) -> Response + Send + Sync>;
 
-/// 日志回调函数类型
+/// Type alias for the log callback function.
 pub type LogCallbackFn = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// 提示回调函数类型
+/// Type alias for the prompt callback function.
 pub type PromptCallbackFn = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// LazySock 服务器主结构
+/// The main LazySock server struct.
 pub struct LazySock {
     socket_path: PathBuf,
     router: Arc<RwLock<Router>>,
@@ -37,7 +39,7 @@ pub struct LazySock {
 }
 
 impl LazySock {
-    /// 创建新的 LazySock 实例
+    /// Creates a new LazySock server instance.
     pub fn new<P: AsRef<Path>>(socket_path: P) -> Self {
         Self {
             socket_path: socket_path.as_ref().to_path_buf(),
@@ -48,7 +50,7 @@ impl LazySock {
         }
     }
 
-    /// 设置日志回调函数
+    /// Sets a custom log callback function.
     pub fn with_log_callback<F>(mut self, callback: F) -> Self
     where
         F: Fn(&str) + Send + Sync + 'static,
@@ -57,7 +59,7 @@ impl LazySock {
         self
     }
 
-    /// 设置提示回调函数
+    /// Sets a custom prompt callback function.
     pub fn with_prompt_callback<F>(mut self, callback: F) -> Self
     where
         F: Fn(&str) + Send + Sync + 'static,
@@ -66,13 +68,13 @@ impl LazySock {
         self
     }
 
-    /// 设置是否在退出时清理socket文件
+    /// Configures whether to clean up the socket file on exit.
     pub fn with_cleanup_on_exit(mut self, cleanup: bool) -> Self {
         self.cleanup_on_exit = cleanup;
         self
     }
 
-    /// 注册路由处理函数
+    /// Registers a handler for a specific method and path.
     pub async fn route<F>(&self, method: Method, path: &str, handler: F)
     where
         F: Fn(Request) -> Response + Send + Sync + 'static,
@@ -81,29 +83,18 @@ impl LazySock {
         router.add_route(method, path, Arc::new(handler));
     }
 
-    /// 启动服务器
+    /// Starts the server and listens for incoming connections.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-        // 检查socket文件是否存在
         if let Err(e) = self.check_and_handle_existing_socket().await {
             return Err(e);
         }
 
-        // 创建Unix socket监听器
         let listener = UnixListener::bind(&self.socket_path)?;
         self.log(&format!("Server started on socket: {:?}", self.socket_path));
 
-        // 设置信号处理器用于优雅关闭
         let socket_path_for_cleanup = self.socket_path.clone();
         let cleanup_on_exit = self.cleanup_on_exit;
-        let mut cleanup_task = tokio::spawn(async move {
-            if let Ok(()) = signal::ctrl_c().await {
-                if cleanup_on_exit {
-                    let _ = fs::remove_file(&socket_path_for_cleanup).await;
-                }
-            }
-        });
 
-        // 主服务循环
         loop {
             tokio::select! {
                 result = listener.accept() => {
@@ -124,8 +115,12 @@ impl LazySock {
                         }
                     }
                 }
-                _ = &mut cleanup_task => {
+                _ = signal::ctrl_c() => {
                     self.log("Server shutting down...");
+                    if cleanup_on_exit {
+                        let _ = fs::remove_file(&socket_path_for_cleanup).await;
+                        self.log(&format!("Cleaned up socket file: {:?}", socket_path_for_cleanup));
+                    }
                     break;
                 }
             }
@@ -134,37 +129,35 @@ impl LazySock {
         Ok(())
     }
 
-    /// 检查并处理已存在的socket文件
+    /// Checks for an existing socket file and handles it.
     async fn check_and_handle_existing_socket(&self) -> Result<(), Box<dyn std::error::Error>> {
         if self.socket_path.exists() {
             self.prompt(
                 "Socket file already exists. Will override in 3 seconds... (Ctrl+C to abort now)",
             );
 
-            // 等待3秒，期间可以被Ctrl+C中断
             tokio::select! {
                 _ = sleep(Duration::from_secs(3)) => {
                     fs::remove_file(&self.socket_path).await?;
-                    self.log("Removed existing socket file");
+                    self.log("Removed existing socket file.");
                 }
                 _ = signal::ctrl_c() => {
-                    self.prompt("Aborted by user");
+                    self.prompt("Aborted by user.");
                     return Err("User aborted".into());
                 }
             }
         }
-
         Ok(())
     }
 
-    /// 记录日志
+    /// Logs a message using the configured callback.
     fn log(&self, message: &str) {
         if let Some(callback) = &self.log_callback {
             callback(message);
         }
     }
 
-    /// 显示提示信息
+    /// Shows a prompt message using the configured callback.
     fn prompt(&self, message: &str) {
         if let Some(callback) = &self.prompt_callback {
             callback(message);
@@ -172,7 +165,7 @@ impl LazySock {
     }
 }
 
-/// 处理单个连接
+/// Handles a single incoming client connection.
 async fn handle_connection(
     mut stream: UnixStream,
     router: Arc<RwLock<Router>>,
@@ -181,45 +174,47 @@ async fn handle_connection(
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
 
-    // 解析HTTP请求行
     let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
     if parts.len() < 2 {
         return Err("Invalid request line".into());
     }
 
-    let method = match parts[0] {
-        "GET" => Method::Get,
-        "POST" => Method::Post,
-        "PUT" => Method::Put,
-        "DELETE" => Method::Delete,
-        _ => return Err("Unsupported method".into()),
-    };
-
+    let method = Method::from_str(parts[0]).ok_or("Unsupported HTTP method")?;
     let path = parts[1].to_string();
 
-    // 读取剩余的头部（简单实现，跳过）
-    let headers = HashMap::new();
+    let mut headers = HashMap::new();
     let mut line = String::new();
-    while reader.read_line(&mut line).await? > 0 {
+    loop {
+        reader.read_line(&mut line).await?;
         if line.trim().is_empty() {
             break;
         }
-        // 这里可以解析头部，简单起见暂时跳过
+        if let Some((key, value)) = line.split_once(':') {
+            headers.insert(key.trim().to_string(), value.trim().to_string());
+        }
         line.clear();
     }
 
-    // 创建请求对象
-    let request = Request::new(method.clone(), path.clone(), headers, Vec::new());
+    let mut body = Vec::new();
+    if let Some(content_length_str) = headers.get("Content-Length") {
+        if let Ok(content_length) = content_length_str.parse::<usize>() {
+            if content_length > 0 {
+                body.resize(content_length, 0);
+                reader.read_exact(&mut body).await?;
+            }
+        }
+    }
 
-    // 路由处理
+    let request = Request::new(method.clone(), path, headers, body);
     let router_guard = router.read().await;
-    let response = if let Some(handler) = router_guard.find_handler(&method, &path) {
-        handler(request)
-    } else {
-        Response::not_found("Route not found")
-    };
 
-    // 发送响应
+    let response =
+        if let Some(handler) = router_guard.find_handler(&method, request.path_without_query()) {
+            handler(request)
+        } else {
+            Response::not_found("Route not found")
+        };
+
     let response_data = response.to_http_response();
     stream.write_all(response_data.as_bytes()).await?;
     stream.flush().await?;
@@ -227,12 +222,12 @@ async fn handle_connection(
     Ok(())
 }
 
-/// 便捷宏用于快速创建服务器
+/// A convenient macro to quickly create a server instance using `fancy-log`.
 #[macro_export]
 macro_rules! lazy_sock {
     ($path:expr) => {
         $crate::LazySock::new($path)
-            .with_log_callback(|msg| println!("{}", msg))
-            .with_prompt_callback(|msg| println!("{}", msg))
+            .with_log_callback(|msg| fancy_log::log(fancy_log::LogLevel::Info, msg))
+            .with_prompt_callback(|msg| fancy_log::log(fancy_log::LogLevel::Info, msg))
     };
 }
