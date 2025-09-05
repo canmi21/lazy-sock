@@ -1,0 +1,24 @@
+[package]
+name = "lazy-sock"
+version = "1.0.3"
+edition = "2024"
+description = "A lightweight library for building Unix Domain Socket services with zero boilerplate. It provides a simple macro to create .sock files (default in /tmp, no root required, auto-clean on reboot). Just init the socket path, register routes, bind handlers, and you can curl for JSON responses."
+license = "MIT"
+repository = "https://github.com/canmi21/lazy-sock"
+readme = "README.md"
+keywords = ["network", "server", "unix", "socket", "router"]
+categories = ["network-programming", "web-programming", "development-tools"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["lib"]
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+[dependencies]
+dotenvy = "0.15"
+fancy-log = "0.1"
+lazy-motd = "1"
+tokio = { version = "1", features = ["full"] }
